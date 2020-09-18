@@ -1,0 +1,306 @@
+---
+title: "Fake JobPosting Prediction"
+author: "Priyank Prakash Babu"
+date: "6/10/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadpackages, include = FALSE}
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load(e1071, ggplot2, caret, rmarkdown, corrplot, tidyverse,"RCurl",dslabs,gridExtra,tm,"party",dpylr,stopwords,randomForest,readr, SnowballC, tictoc, lubridate,data.table,wordcloud,grid,tinytex,tidytext,readr,"RColorBrewer",DMwR,gbm)
+```
+
+```{r loadData}
+fake_job = read.csv("fake_job_postings.csv")
+view(fake_job)
+str(fake_job)
+```
+
+```{r Exploratory Data Analysis}
+# List of unique columns
+col_names <- colnames(fake_job)
+#str(JobPosting_Data)
+unique_col_count <-  fake_job %>% 
+  summarise(n_title = n_distinct(title),
+            n_location = n_distinct(location),
+            n_department = n_distinct(department),
+            n_salary_range = n_distinct(salary_range),
+            n_employment_type = n_distinct(employment_type),
+            n_required_experience = n_distinct(required_experience),
+            n_required_education = n_distinct(required_education),
+            n_industry = n_distinct(industry),
+            n_function = n_distinct(function.),
+            n_fraudulent = n_distinct(fraudulent))
+
+print(unique_col_count)
+
+```
+
+```{r}
+# Distribution of jobs
+
+fake_job %>% group_by(fraudulent) %>%  ggplot(aes(fraudulent, group = fraudulent)) + 
+  geom_bar(aes(fill = fraudulent), stat = "count") + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  geom_text(aes(label=..count..),stat='count',position=position_stack(vjust=0.5)) + 
+  ggtitle("Genuine Vs. Fraud Jobs") + xlab("Fradulent Flag") + ylab("Count of Job") + theme_bw()
+```
+
+```{r}
+# Distribution of degrees
+
+degree_distribution <- fake_job %>% group_by(required_education, fraudulent) %>% summarise(count = n())
+
+degree_distribution %>%  ggplot(aes(reorder(
+  degree_distribution$required_education, -degree_distribution$count), degree_distribution$count)) +
+  geom_bar(stat = "identity", aes(fill = fraudulent)) + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Distribution of degrees") + xlab("Required Education") + ylab("Job Count")
+```
+
+```{r}
+# Distribution of experience
+experience_distribution <- fake_job %>% group_by(required_experience, fraudulent) %>% summarise(count = n())
+
+experience_distribution %>%  ggplot(aes(reorder(
+  experience_distribution$required_experience, -experience_distribution$count), experience_distribution$count)) +
+  geom_bar(stat = "identity", aes(fill = fraudulent)) + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Jobs Per Required Experience Feature") + xlab("Required Experience") + ylab("Job Count")
+```
+
+```{r}
+# Distribution of Employment Types
+employment_type_distribution <- fake_job %>% group_by(employment_type, fraudulent) %>% summarise(count = n())
+
+employment_type_distribution %>%  ggplot(aes(reorder(
+  employment_type_distribution$employment_type, -employment_type_distribution$count), employment_type_distribution$count)) +
+  geom_bar(stat = "identity", aes(fill = fraudulent)) + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Jobs Per Required Employment Types Feature") + xlab("Employment Type") + ylab("Job Count")
+```
+
+```{r}
+# Distribution of experience and education
+fake_job %>% group_by(required_education) %>% ggplot(aes(x = required_education), group = required_experience) +
+  geom_bar(aes(fill = fake_job$required_experience), stat = "count") + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Jobs Per Required Education and Experience") + xlab("Required Education") + 
+  ylab("Job Count") + labs(fill='Required Experience')
+```
+
+```{r}
+# Distribution of experience and employment type
+fake_job %>% group_by(employment_type) %>% ggplot(aes(x = employment_type), group = required_experience) +
+  geom_bar(aes(fill = fake_job$required_experience), stat = "count") + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Jobs Per Required Experience") + xlab("Employment Type") + 
+  ylab("Job Count") + labs(fill='Required Experience')
+```
+
+```{r}
+# Distribution of education and employment type
+fake_job %>% group_by(employment_type) %>% ggplot(aes(x = employment_type), group = required_education) +
+  geom_bar(aes(fill = fake_job$required_education), stat = "count") + 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Jobs Per Required Education") + xlab("Employment Type") + 
+  ylab("Job Count") + labs(fill='Education Level')
+```
+
+```{r}
+levels(fake_job$benefits)<-c(levels(fake_job$benefits),"None")  #Add the extra level to your factor
+fake_job$benefits[is.na(fake_job$benefits)] <- "None"
+
+EmptyValues_df <- fake_job %>% summarise(Empty_JobIDs = sum(job_id == ""), Empty_Titles = sum(title == ""), 
+                                                Empty_Locations = sum(location == ""),
+                                                Empty_Depts = sum(department == ""), Empty_SalRanges = sum(salary_range == ""),
+                                                Empty_CompanyProfiles = sum(company_profile ==""), Empty_Desciptions = sum(description == ""),
+                                                Empty_Requirements = sum(requirements == ""), Empty_Benefits = sum(benefits == ""),
+                                                Empty_Telecommuting = sum(telecommuting ==""), Empty_HasLogo = sum(has_company_logo == ""),
+                                                Empty_HasQuestions = sum(has_questions == ""),Empty_EmpType = sum(employment_type == ""),
+                                                Empty_ReqExperience = sum(required_experience == ""), Empty_ReqEducation = sum(required_education ==""),
+                                                Empty_Industry = sum(industry == ""), Empty_Function = sum(function. == ""),
+                                                Empty_Fraudulent = sum(fraudulent == ""))
+EmptyValues_df <- as.data.frame(t(EmptyValues_df))
+EmptyValues_df$Names <- rownames(EmptyValues_df)
+
+ggplot(EmptyValues_df, aes(x = EmptyValues_df$Names, y = EmptyValues_df$V1)) + geom_bar(stat = "Identity", fill = "blue")+ 
+  theme(axis.text.x = element_text(angle = 90, size = 10)) + 
+  ggtitle("Empty Features") + xlab("Column Name") + 
+  ylab("Count")
+```
+
+```{r Modeling data}
+
+str(fake_job)
+
+fake.job<-fake_job[,c(1,10,11,12,13,14,15,16,17,18)]
+
+fake.job$telecommuting<-as.factor(fake.job$telecommuting)
+fake.job$has_company_logo<-as.factor(fake.job$has_company_logo)
+fake.job$has_questions<-as.factor(fake.job$has_questions)
+fake.job$fraudulent<-as.factor(fake.job$fraudulent)
+fake.job$employment_type<-as.factor(fake.job$employment_type)
+fake.job$required_experience<-as.factor(fake.job$required_experience)
+fake.job$required_education<-as.factor(fake.job$required_education)
+fake.job$industry<-as.factor(fake.job$industry)
+fake.job$function.<-as.factor(fake.job$function.)
+
+fake.job.impute<-fake.job[,c(1,2,3,4,5,6,7,10)]
+
+data<-centralImputation(fake.job.impute)
+
+sapply(data,function(x) sum(is.na(x)))
+
+data$job_id<-NULL
+set.seed(42)
+train.index<-createDataPartition(data$fraudulent,p=0.8,list = FALSE)
+train.df<-data[train.index,]
+test.df<-data[-train.index,]
+```
+
+```{r Logistic Regression}
+log.fake<-glm(fraudulent~.,data = train.df,family = "binomial")
+pred<-predict(log.fake,test.df,type = "response")
+#confusionMatrix(test.df$fraudulent,pred)
+#pred<-predict(log.fake,test.df,type = "response")
+#table(test.df$fraudulent , pred > 0.5)
+table(test.df$fraudulent , pred > 0.02)
+table(test.df$fraudulent , pred > 0.01)
+```
+
+```{r random forest}
+randomForest.fake<-randomForest(fraudulent~.,data = train.df)
+pred<-predict(randomForest.fake,test.df)
+confusionMatrix(test.df$fraudulent,pred)
+importance(randomForest.fake)
+varImpPlot(randomForest.fake)
+```
+
+```{r Naive Bayes}
+nb.fit = naiveBayes(fraudulent~., data = train.df)
+preditions = predict(nb.fit, test.df, type = 'class')
+confusionMatrix(preditions,test.df$fraudulent)
+summary(nb.fit)
+nb.fit
+```
+
+
+```{r SVM}
+SVM.fake = gbm(fraudulent~., data = train.df, distribution = "gaussian",n.trees = 10, verbose = F)
+prediction = predict(SVM.fake, test.df, n.tress = 10)
+confusionMatrix(prediction,test.df$fraudulent)
+```
+
+
+```{r Modelling data with Text Analytics}
+# Create the corpus object
+corpus <- Corpus(VectorSource(fake_job$description))
+# Remove punctuation
+corpus <- tm_map(corpus, removePunctuation)
+# Remove stop words
+corpus <- tm_map(corpus, removeWords, stopwords(language = "en"))
+# Perform stemmign
+corpus <- tm_map(corpus, stemDocument)
+
+# High frequency words using documenttermmatrix
+frequencies <- DocumentTermMatrix(corpus)
+# Removing sparse data
+sparse_data <- removeSparseTerms(frequencies, 0.995)
+# Converting to dataframe for furthur analysis
+sparse_data_df <- as.data.frame(as.matrix(sparse_data))
+# Assigning column names
+colnames(sparse_data_df) <- make.names(colnames(sparse_data_df))
+# Adding the dependent variable
+sparse_data_df$fraudulent <- fake_job$fraudulent
+# Removing duplicate column names
+colnames(sparse_data_df) <- make.unique(colnames(sparse_data_df), sep = "_")
+
+set.seed(2020, sample.kind = "Rounding")
+test_index <- createDataPartition(y = sparse_data_df$fraudulent, times = 1, p = 0.1, list= FALSE)
+train_set <- sparse_data_df[-test_index, ]
+validation <- sparse_data_df[test_index, ]
+train_set$fraudulent = as.factor(train_set$fraudulent)
+validation$fraudulent = as.factor(validation$fraudulent)
+```
+
+```{r Naive Bayes}
+nb.fit = naiveBayes(fraudulent~., data = train_set)
+preditions = predict(nb.fit, validation, type = 'class')
+mean(preditions == validation$fraudulent)
+
+results = data.frame(Predicted=preditions, Actual=train_set[,'fraudulent'] )
+confusionMatrix(preditions,validation$fraudulent)
+
+```
+
+```{r SVM}
+n = 1000
+
+b = 2
+
+index <- sample(nrow(train_set), n)
+
+svm_train_data <- train_set[index, ]
+
+ctrl <- trainControl(method = "cv", verboseIter = FALSE, number = 5)
+
+svm_fit <- train(fraudulent ~ ., data = svm_train_data, method = "svmLinear", preProcess = c("center","scale"), trControl = ctrl)
+#Tuning Parameter
+grid_svm <- expand.grid(C = c(0.01, 0.1, 1, 10, 20))
+#Training Model
+svm_fit <- train(fraudulent ~ .,data = train_set, method = "svmLinear", preProcess = c("center","scale"), tuneGrid = grid_svm, trControl = ctrl)
+
+ctrl <- trainControl(method = "cv", verboseIter = TRUE, number = 5)
+grid_svm <- expand.grid(C = c(0.01))
+svm_fit <- train(fraudulent ~ .,data = train_set, 
+                 method = "svmLinear", preProcess = c("center","scale"),
+                 tuneGrid = grid_svm, trControl = ctrl)
+
+#Prediction
+svm_pred <- predict(svm_fit, newdata = validation)
+#Confusion Matrix
+CM_svm <- confusionMatrix(svm_pred, validation$fraudulent)
+
+CM_svm
+```
+
+```{r Random Forest}
+control<- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+grid <-data.frame(mtry = c(100))
+
+train_rf <- train(fraudulent ~ ., method = "rf", data = train_set, ntree = 150, trControl = control,tuneGrid = grid)
+
+predict_rf <- predict(train_rf, newdata = validation)
+
+confMatrix_rf <- confusionMatrix(predict_rf, validation$fraudulent)
+
+confMatrix_rf
+```
+
+
+```{r Stochastic Gradient Boosting}
+n <- 1000
+
+control<- trainControl(method = "cv", number = 5)
+
+gbmGrid <+- expand.grid(interaction.depth = c(1, 5, 9), n.trees = (1:30)*50, shrinkage = 0.1, n.minobsinnode = 20)
+
+index <- sample(nrow(train_set), n)
+
+gbm_train_data <- train_set[index, ]
+
+subset_train_gbm <- train(fraudulent ~ ., method = "gbm", data = gbm_train_data, trControl = control, verbose = TRUE, tuneGrid = gbmGrid)
+
+gbmGrid <- expand.grid(interaction.depth = c(1, 5, 10, 25, 50, 100), n.trees = 150, shrinkage = 0.1, n.minobsinnode = 20)
+train_gbm <- train(fraudulent ~ ., method = "gbm", data = train_set, trControl = control, verbose = TRUE, tuneGrid = gbmGrid)
+
+```
+
+
+
+
